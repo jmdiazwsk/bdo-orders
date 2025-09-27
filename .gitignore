@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+.env
+.venv/
+venv/
+dist/
+build/
+
+# Poetry/pip-tools caches
+.eggs/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Node/Frontend
+node_modules/
+.next/
+out/
