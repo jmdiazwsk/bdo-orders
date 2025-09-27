@@ -6,6 +6,7 @@ uvicorn[standard]
 SQLAlchemy>=2.0
 asyncpg
 alembic
+psycopg[binary]
 
 # Validation & settings
 pydantic>=2
