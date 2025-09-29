@@ -75,6 +75,13 @@ cd bdo-orders-platform
 
 The project uses environment variables defined in `infra/.env`. The default configuration should work out of the box.
 
+Example configuration files are provided and should be copied before running:
+
+```bash
+# From project root
+cp .env.example .env
+cp infra/.env.example infra/.env
+
 ### 3. Start Infrastructure
 
 ```bash
@@ -415,77 +422,119 @@ docker-compose up -d --build
 3. **Event-Driven Architecture**: Loose coupling between services
 4. **Repository Pattern**: Clean separation of data access logic
 
+## Kubernetes Deployment
+
+### Consumer Deployment
+
+Deploy the consumer service with proper configuration:
+
+```bash
 # Deploy consumer
 kubectl apply -n bdo-dev -f k8s/consumer-deployment.yaml
 kubectl apply -n bdo-dev -f k8s/consumer-pdb.yaml
+```
 
+**Key Configuration:**
 
-Deployment: replicas = number of Kafka partitions (scalable)
+- **Deployment**: Replicas should match the number of Kafka partitions for optimal scalability
+- **Delivery Semantics**: At-least-once delivery with manual commits + database idempotency
+- **PodDisruptionBudget (PDB)**: Ensures availability during node upgrades
+- **Metrics**: Prometheus counters exposed via ServiceMonitor
 
-Delivery: at-least-once semantics with manual commits + DB idempotency
+### Database & Kafka
 
-PDB: ensures availability during node upgrades
+#### Development Environment
 
-Metrics: Prometheus counters with ServiceMonitor
+Deploy using Helm charts:
 
-Database & Kafka
-
-DEV: deploy with Helm charts (Bitnami/Strimzi for Kafka, Bitnami Postgres with PVC)
-
-PROD: use managed services (AWS RDS/Aurora for Postgres, MSK/Confluent for Kafka)
-
-# Example dev setup with Helm
+```bash
+# Add Bitnami repository
 helm repo add bitnami https://charts.bitnami.com/bitnami
+
+# Install Kafka (using Bitnami or Strimzi)
 helm install kafka bitnami/kafka -n bdo-dev
+
+# Install PostgreSQL with Persistent Volume
 helm install postgres bitnami/postgresql -n bdo-dev
+```
 
-Migrations
-# Run Alembic migrations before API/consumer startup
+#### Production Environment
+
+Use managed services for reliability and reduced operational overhead:
+
+- **Database**: AWS RDS or Aurora for PostgreSQL
+- **Message Broker**: AWS MSK or Confluent Cloud for Kafka
+
+### Database Migrations
+
+Run Alembic migrations before service startup:
+
+```bash
+# Apply migration job
 kubectl apply -n bdo-dev -f k8s/job-migrate.yaml
+```
 
+This ensures the database schema is up to date before API and consumer services start.
 
-Ensures schema is up to date before services start
+### Observability
 
-Observability
+#### Logging
 
-Logs: structured with order_id, partition, offset
+Structured JSON logs including:
+- `order_id`: Order identifier for tracing
+- `partition`: Kafka partition number
+- `offset`: Message offset in partition
 
-Metrics: Prometheus + Grafana dashboards
+#### Metrics
 
-Key metrics:
+Prometheus metrics with Grafana dashboards for visualization.
 
-messages_consumed_total
+**Key Metrics:**
 
-processing_latency_seconds
+| Metric | Description |
+|--------|-------------|
+| `messages_consumed_total` | Total messages processed |
+| `processing_latency_seconds` | Time to process each message |
+| `db_upserts_total` | Database insert/update operations |
+| `retries_total` | Number of retry attempts |
+| `dlq_total` | Messages sent to Dead Letter Queue |
+| `kafka_consumer_lag` | Consumer lag behind producers |
 
-db_upserts_total
+### Deployment Flow
 
-retries_total
+Complete deployment sequence:
 
-dlq_total
-
-kafka_consumer_lag
-
-Deployment Flow
-# 1. Namespace + configs
+```bash
+# 1. Create namespace and apply configurations
 kubectl create ns bdo-dev
 kubectl apply -n bdo-dev -f k8s/configmap.yaml
 kubectl apply -n bdo-dev -f k8s/secrets.yaml
 
-# 2. Migrations
+# 2. Run database migrations
 kubectl apply -n bdo-dev -f k8s/job-migrate.yaml
 
-# 3. API + Consumer
+# 3. Deploy API and Consumer services
 kubectl apply -n bdo-dev -f k8s/api-deployment.yaml
 kubectl apply -n bdo-dev -f k8s/consumer-deployment.yaml
 
-# 4. Verify
+# 4. Verify deployment
 kubectl -n bdo-dev get pods,svc,ingress
+```
 
-# With this Kubernetes design the platform is:
+### Platform Characteristics
 
-Scalable: API via HPA, consumer via partitions
+With this Kubernetes design, the platform achieves:
 
-Fault-tolerant: PDBs, idempotent DB writes, managed DB/Kafka in prod
-
-Observable: logs and metrics integrated with Prometheus/Grafana
+- **Scalable**: 
+  - API scales via Horizontal Pod Autoscaler (HPA)
+  - Consumer scales based on Kafka partition count
+  
+- **Fault-tolerant**: 
+  - PodDisruptionBudgets for high availability
+  - Idempotent database writes prevent duplicates
+  - Managed services (RDS/Aurora, MSK) in production
+  
+- **Observable**: 
+  - Structured logging for debugging
+  - Prometheus metrics for monitoring
+  - Grafana dashboards for visualization
