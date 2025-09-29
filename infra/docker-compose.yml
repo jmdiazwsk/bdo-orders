@@ -1,20 +1,147 @@
 services:
-  postgres:
-    image: postgres:16
-    container_name: bdo-postgres
+  # Infrastructure
+  db:
+    image: postgres:15-alpine
     environment:
-      POSTGRES_USER: orders
-      POSTGRES_PASSWORD: orders
-      POSTGRES_DB: orders_db
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5433:5432"  
+      - "${POSTGRES_PORT}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orders -d orders_db"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
       timeout: 5s
       retries: 5
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+    healthcheck:
+      test: kafka-topics --bootstrap-server kafka:29092 --list
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:3.0
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: ${LOCALSTACK_SERVICES}
+      DEBUG: 1
+      EDGE_PORT: 4566
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "../scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-aws.sh"
+
+  topic-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: >
+      bash -lc "
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists
+      --topic orders --partitions 3 --replication-factor 1
+      "
+    restart: "no"
+  # Application Services
+  api:
+    build: 
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "${API_PORT}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${POSTGRES_PASSWORD}@db:5432/${DB_NAME}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: ${AWS_REGION}
+      AWS_SNS_TOPIC_ARN: ${AWS_SNS_TOPIC_ARN}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      PYTHONPATH: /app
+    volumes:
+      - ../backend/app:/app/app
+      - ../alembic:/app/alembic
+      - ../alembic.ini:/app/alembic.ini
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  consumer:
+    build: 
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.consumers.orders_consumer"]
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+      topic-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${POSTGRES_PASSWORD}@db:5432/${DB_NAME}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_ORDERS_TOPIC: ${KAFKA_ORDERS_TOPIC}
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: ${AWS_REGION}
+      AWS_SNS_TOPIC_ARN: ${AWS_SNS_TOPIC_ARN}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      PYTHONPATH: /app
+    volumes:
+      - ../backend/app:/app/app
+      - ../backend/alembic:/app/alembic
+      - ../backend/alembic.ini:/app/alembic.ini
+    restart: unless-stopped
+
+  # Utility container for testing
+  kcat:
+    image: edenhill/kcat:1.7.1
+    container_name: bdo-kcat
+    depends_on:
+      kafka:
+        condition: service_healthy
+    tty: true
+    stdin_open: true
+    entrypoint: ["sh", "-lc", "tail -f /dev/null"] # Keep the container running
+
 volumes:
-  pgdata:
+  postgres_data:

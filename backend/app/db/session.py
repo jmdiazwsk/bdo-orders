@@ -1,7 +1,8 @@
+#C:\bdo-orders-platform\backend\app\db\session.py
 from collections.abc import AsyncGenerator
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
-from backend.app.core.settings import settings
+from app.core.settings import settings
 
 class Base(DeclarativeBase):
     pass
@@ -16,3 +17,6 @@ AsyncSessionLocal = async_sessionmaker(
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
+
+def get_async_session_maker():
+    return AsyncSessionLocal

@@ -1,3 +1,4 @@
+#C:\bdo-orders-platform\backend\app\schemas\order.py
 from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from decimal import Decimal

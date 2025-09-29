@@ -1,0 +1,129 @@
+version: "3.9"
+
+name: bdo-orders
+services:
+  db:
+    image: postgres:16
+    container_name: bdo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [bdo-net]
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: bdo-kafka
+    restart: unless-stopped
+    environment:
+      # KRaft mode (sin Zookeeper)
+      KAFKA_ENABLE_KRAFT: "yes"
+      KAFKA_BROKER_ID: ${KAFKA_BROKER_ID}
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_NODE_ID: ${KAFKA_BROKER_ID}
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "${KAFKA_BROKER_ID}@kafka:9093"
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Conveniencia en dev
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafkadata:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9092'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [bdo-net]
+
+  localstack:
+    image: localstack/localstack:stable
+    container_name: bdo-localstack
+    restart: unless-stopped
+    environment:
+      SERVICES: ${LOCALSTACK_SERVICES}
+      EDGE_PORT: ${LOCALSTACK_EDGE_PORT}
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      DEBUG: "0"
+    ports:
+      - "${LOCALSTACK_EDGE_PORT}:4566"
+    volumes:
+      - "localstackdata:/var/lib/localstack"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:4566/_localstack/health | grep '\"initialized\": true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    networks: [bdo-net]
+
+  api:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    container_name: bdo-api
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    environment:
+
+      # Settings
+      DATABASE_URL: postgresql+asyncpg://orders:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SYNC_DATABASE_URL: postgresql+psycopg://orders:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      KAFKA_BROKERS: kafka:9092
+      AWS_ENDPOINT_URL: http://localstack:4566
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+
+      KAFKA_ORDERS_TOPIC: ${KAFKA_ORDERS_TOPIC}
+
+      AWS_REGION: ${AWS_REGION}
+      AWS_SNS_TOPIC_ARN: ${AWS_SNS_TOPIC_ARN}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+    ports:
+      - "${API_PORT}:8000"
+    command: >
+      bash -lc "alembic upgrade head && uvicorn backend.app.main:app
+      --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    networks: [bdo-net]
+
+  # Para probar Kafka desde consola
+  kcat:
+    image: edenhill/kcat:1.7.1
+    container_name: bdo-kcat
+    entrypoint: ["sh","-c","sleep infinity"]
+    depends_on:
+      kafka:
+        condition: service_started
+    networks: [bdo-net]
+
+networks:
+  bdo-net:
+
+volumes:
+  pgdata:
+  kafkadata:
+  localstackdata:

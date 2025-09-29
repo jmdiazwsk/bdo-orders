@@ -1,9 +1,10 @@
+#C:\bdo-orders-platform\backend\app\api\routes\orders.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from backend.app.db.session import get_session
-from backend.app.models.order import Order
-from backend.app.schemas.order import OrderOut
+from app.db.session import get_session
+from app.models.order import Order
+from app.schemas.order import OrderOut
 
 router = APIRouter(prefix="/orders")
 
